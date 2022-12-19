@@ -39,6 +39,104 @@ function getClassOrderPolyfill(classes, { env }) {
   return classNamesWithOrder
 }
 
+// Naive aurelia.js templating support
+function getClassNameFromStringExpression (classes) {
+  return classes
+    .map((curr) => {
+      if (!curr.startsWith("${")) {
+        return curr
+      }
+
+      curr = curr.replaceAll(/ +/g, " ")
+      let reducedClasses = undefined
+
+      // if using value converter (eg: "${ 'className' | valueConverter:param1 }")
+      if (/(?<!\|)\|(?!\|)/.test(curr)) {
+        reducedClasses = curr
+          .split("|")[0]
+          .split(/["'`]/)[1]
+      }
+      // if using ternary (eg: "${ condition ? 'className1' : 'className2' }")
+      else if (/(?<!\?)\?(?!\?)/.test(curr) && /(?<=["'` ]):(?=["'` ])/.test(curr)) {
+        reducedClasses = curr
+          .split(/(?<!\?)\?(?!\?)/)[1]
+          .split(/["'`]/)
+          .reduce((acc, value, index) => {
+            if (index === 1 || index === 3) {
+              acc.push(value)
+            }
+
+            return acc
+          }, [])
+          .find((innercurr) => /^[\w-:&/'`\[\]\(\)\.]+$/.test(innercurr))
+      }
+      else {
+        return curr
+      }
+
+      return (
+        (reducedClasses === undefined || reducedClasses.length === 0)
+          ? curr
+          : [ curr, reducedClasses ]
+      )
+    })
+}
+
+// Naive aurelia.js templating support
+function concatStringExpressionClassNames (classes, whitespace) {
+  let { stringExpressionClasses, stringExpressionWhitespace } = classes
+    .reduce((acc, curr, index) => {
+      if (acc.ternary) {
+        const last = acc.stringExpressionClasses.length - 1
+        acc.stringExpressionWhitespace.push(index - 1)
+        acc.stringExpressionClasses[last] = `${ acc.stringExpressionClasses[last] }${ whitespace[index - 1] }${ curr }`
+
+        if (curr === "}") {
+          acc.ternary = false
+        }
+      }
+      else {
+        acc.stringExpressionClasses.push(curr)
+
+        if (curr === "${") {
+          acc.ternary = true
+        }
+      }
+
+      return acc
+    }, { ternary: false, stringExpressionClasses: [], stringExpressionWhitespace: [] })
+
+  const reducedClasses = getClassNameFromStringExpression(stringExpressionClasses)
+
+  stringExpressionClasses = reducedClasses
+    .map((curr) => {
+      if (typeof curr === "string") {
+        return curr
+      }
+
+      return curr[1]
+    })
+
+  stringExpressionWhitespace = whitespace
+    .filter((curr, index) => !stringExpressionWhitespace.includes(index))
+
+  return ({ stringExpressionClasses, stringExpressionWhitespace, reducedClasses })
+}
+
+// Naive aurelia.js templating support
+function remapStringExpressionClassNames (classes, reducedClasses) {
+  reducedClasses
+    .filter((curr) => Array.isArray(curr))
+    .forEach(([ original, reduced ]) => {
+      const index = classes
+        .findIndex((innercurr) => innercurr === reduced)
+
+      classes[index] = original
+    })
+
+  return classes
+}
+
 export function sortClasses(
   classStr,
   { env, ignoreFirst = false, ignoreLast = false },
@@ -72,7 +170,15 @@ export function sortClasses(
     suffix = `${whitespace.pop() ?? ''}${classes.pop() ?? ''}`
   }
 
+  // Naive aurelia.js templating support
+  const ternary = concatStringExpressionClassNames(classes, whitespace)
+  classes = ternary.stringExpressionClasses
+  whitespace = ternary.stringExpressionWhitespace
+
   classes = sortClassList(classes, { env })
+
+  // Naive aurelia.js templating support
+  classes = remapStringExpressionClassNames(classes, ternary.reducedClasses)
 
   for (let i = 0; i < classes.length; i++) {
     result += `${classes[i]}${whitespace[i] ?? ''}`
